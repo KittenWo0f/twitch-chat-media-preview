@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Twitch Chat Media Preview
 // @namespace    https://github.com/KittenWo0f/twitch-chat-media-preview
-// @version      1.1.0
+// @version      1.1.1
 // @description  Показывает изображения и видео в чате Twitch: kappa.lol, YouTube, imgur, gyazo и др.
 // @author       local
 // @match        https://www.twitch.tv/*
@@ -307,6 +307,12 @@
             });
         });
     }
+
+    // ВАЖНО:
+    // теперь работает с текстом:
+    // "смотри https://imgur.com/abc lol"
+    // "hello https://youtu.be/xxxx test"
+    // и несколькими ссылками
 
     function extractUrls(text) {
         if (!text) return [];
@@ -641,6 +647,7 @@
 
         const urls = new Set();
 
+        // Ищем тело сообщения — по приоритету, первый найденный побеждает
         const msgScope =
             msgEl.querySelector('[data-a-target="chat-line-message-body"]')  // нативный Twitch
             || msgEl.querySelector('.seventv-chat-message-body')              // 7TV
@@ -649,11 +656,13 @@
 
         if (!msgScope) return;
 
+        // Текст → extractUrls
         const text = msgScope.innerText || msgScope.textContent || '';
         for (const url of extractUrls(text)) {
             urls.add(url);
         }
 
+        // <a href> внутри тела — FFZ и 7TV оборачивают ссылки в теги
         msgScope.querySelectorAll('a[href]').forEach(a => {
             const href = a.getAttribute('href');
             if (href && /^https?:\/\//i.test(href)) urls.add(href);
@@ -744,6 +753,8 @@
             '.chat-scrollable-area__message-container',
             '.simplebar-content',
             '.seventv-chat-scroller',
+            '.seventv-chat-list',
+            '[class*="seventv-chat"]',
         ];
 
         const containers = new Set();
@@ -752,9 +763,17 @@
             document.querySelectorAll(sel).forEach(el => containers.add(el));
         }
 
+        // Если специфичные контейнеры не найдены — наблюдаем за body
+        // (менее эффективно, но гарантированно поймает все варианты)
         if (!containers.size) {
-            setTimeout(startObserver, 1500);
-            return;
+            const body = document.body;
+
+            if (!body) {
+                setTimeout(startObserver, 1500);
+                return;
+            }
+
+            containers.add(body);
         }
 
         for (const container of containers) {
