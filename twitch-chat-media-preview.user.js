@@ -1,14 +1,22 @@
 // ==UserScript==
 // @name         Twitch Chat Media Preview
 // @namespace    https://github.com/KittenWo0f/twitch-chat-media-preview
-// @version      1.0.0
+// @version      1.1.0
 // @description  Показывает изображения и видео в чате Twitch: kappa.lol, YouTube, imgur, gyazo и др.
 // @author       local
 // @match        https://www.twitch.tv/*
 // @match        https://dashboard.twitch.tv/*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
-// @connect      *
+// @connect      www.youtube.com
+// @connect      img.youtube.com
+// @connect      kappa.lol
+// @connect      i.imgur.com
+// @connect      imgur.com
+// @connect      prnt.sc
+// @connect      i.gyazo.com
+// @connect      gyazo.com
+// @connect      ibb.co
 // @run-at       document-idle
 // @updateURL   https://github.com/KittenWo0f/twitch-chat-media-preview/raw/refs/heads/main/twitch-chat-media-preview.user.js
 // @downloadURL https://github.com/KittenWo0f/twitch-chat-media-preview/raw/refs/heads/main/twitch-chat-media-preview.user.js
@@ -299,12 +307,6 @@
             });
         });
     }
-
-    // ВАЖНО:
-    // теперь работает с текстом:
-    // "смотри https://imgur.com/abc lol"
-    // "hello https://youtu.be/xxxx test"
-    // и несколькими ссылками
 
     function extractUrls(text) {
         if (!text) return [];
@@ -637,49 +639,34 @@
 
         processed.add(msgEl);
 
-        // ИЩЕМ ТЕКСТ СООБЩЕНИЯ
+        const urls = new Set();
 
-        let fullText = '';
+        const msgScope =
+            msgEl.querySelector('[data-a-target="chat-line-message-body"]')  // нативный Twitch
+            || msgEl.querySelector('.seventv-chat-message-body')              // 7TV
+            || msgEl.querySelector('.message')                                // FFZ
+            || msgEl.querySelector('.chat-line__message-body');               // фолбэк
 
-        // Читаем только тело реального сообщения — data-a-target="chat-line-message-body"
-        // находится вне блока цитаты, поэтому URL из реплая сюда не попадёт
-        const messageBody = msgEl.querySelector('[data-a-target="chat-line-message-body"]');
+        if (!msgScope) return;
 
-        if (messageBody) {
-            fullText = messageBody.innerText || messageBody.textContent || '';
+        const text = msgScope.innerText || msgScope.textContent || '';
+        for (const url of extractUrls(text)) {
+            urls.add(url);
         }
 
-        // Фолбэк для 7TV и других оберток
-        if (!fullText.trim()) {
-            const candidates = msgEl.querySelectorAll(
-                '.chat-line__message-body, .seventv-message-body, [data-a-target="chat-message-text"]'
-            );
+        msgScope.querySelectorAll('a[href]').forEach(a => {
+            const href = a.getAttribute('href');
+            if (href && /^https?:\/\//i.test(href)) urls.add(href);
+        });
 
-            for (const el of candidates) {
-                const txt = el.innerText || el.textContent || '';
-                if (txt.trim()) fullText += ' ' + txt;
-            }
-        }
-
-        // Намеренно НЕ используем msgEl.innerText как финальный фолбэк —
-        // он захватывает весь вложенный текст включая блок цитаты реплая
-
-        const urls = extractUrls(fullText);
-
-        if (!urls.length) return;
+        if (!urls.size) return;
 
         for (const url of urls) {
 
-            // игнор twitch CDN
-
-            if (/twitch\.tv|jtvnw\.net|static-cdn/.test(url)) {
-                continue;
-            }
+            if (/twitch\.tv|jtvnw\.net|static-cdn/.test(url)) continue;
 
             const spinner = document.createElement('span');
-
             spinner.className = 'tcip-loading';
-
             msgEl.appendChild(spinner);
 
             let mediaEl = null;
@@ -688,27 +675,16 @@
                 const media = await resolveMedia(url);
 
                 if (media) {
-
-                    if (media.type === 'image') {
-                        mediaEl = createImageElement(media.src, url);
-
-                    } else if (media.type === 'video') {
-                        mediaEl = createVideoElement(media.src);
-
-                    } else if (media.type === 'youtube') {
-                        mediaEl = await createYouTubeCard(media.videoId, url);
-                    }
+                    if (media.type === 'image') mediaEl = createImageElement(media.src, url);
+                    else if (media.type === 'video') mediaEl = createVideoElement(media.src);
+                    else if (media.type === 'youtube') mediaEl = await createYouTubeCard(media.videoId, url);
                 }
-
             } catch (e) {
                 console.warn('[TwitchChatMedia] Error:', url, e);
             }
 
             spinner.remove();
-
-            if (mediaEl) {
-                msgEl.appendChild(mediaEl);
-            }
+            if (mediaEl) msgEl.appendChild(mediaEl);
         }
     }
 
@@ -735,7 +711,7 @@
     const MSG_SELECTORS = `
         .chat-line__message,
         [data-a-target="chat-line-message"],
-        .seventv-chat-message
+        .seventv-message
     `;
 
     const observer = new MutationObserver((mutations) => {
@@ -764,22 +740,31 @@
 
     function startObserver() {
 
-        const chat = document.querySelector(`
-            .chat-scrollable-area__message-container,
-            .simplebar-content
-        `);
+        const CHAT_SELECTORS = [
+            '.chat-scrollable-area__message-container',
+            '.simplebar-content',
+            '.seventv-chat-scroller',
+        ];
 
-        if (!chat) {
+        const containers = new Set();
+
+        for (const sel of CHAT_SELECTORS) {
+            document.querySelectorAll(sel).forEach(el => containers.add(el));
+        }
+
+        if (!containers.size) {
             setTimeout(startObserver, 1500);
             return;
         }
 
-        observer.observe(chat, {
-            childList: true,
-            subtree: true,
-        });
+        for (const container of containers) {
+            observer.observe(container, {
+                childList: true,
+                subtree: true,
+            });
+        }
 
-        console.log('[TwitchChatMedia] ✓ Observer started (v2.2.0)');
+        console.log(`[TwitchChatMedia] ✓ Observer started on ${containers.size} container(s)`);
     }
 
     startObserver();
@@ -792,9 +777,7 @@
 
     setInterval(() => {
 
-        if (location.pathname === lastPath) {
-            return;
-        }
+        if (location.pathname === lastPath) return;
 
         lastPath = location.pathname;
 
